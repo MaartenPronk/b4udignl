@@ -32,12 +32,13 @@ from qgis.PyQt.QtWidgets import QPushButton, QApplication, QProgressDialog
 from qgis.PyQt.QtCore import Qt
 from qgis import utils
 from .ui_B4UdigNL import Ui_B4UdigNL
-from ifaceqgis import Iface
+from .ifaceqgis import Iface
 import os, gc
 from .core import wv
 from .core import gpkg_export
 from .core import gpkg_doc
-import unzip, zipfile
+from . import unzip
+import zipfile
 
 # create the dialog
 class B4UdigNLDialog(QDialog):
