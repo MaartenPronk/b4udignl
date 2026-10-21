@@ -23,11 +23,64 @@ from builtins import object
 from qgis.PyQt import QtCore, QtGui
 from qgis import core, gui
 import os
+import re
+
+try:
+    # QGIS >= 3.30 en QGIS 4
+    _GEOM_LINE = core.Qgis.GeometryType.Line
+    _GEOM_POLYGON = core.Qgis.GeometryType.Polygon
+except AttributeError:
+    _GEOM_LINE = core.QgsWkbTypes.LineGeometry
+    _GEOM_POLYGON = core.QgsWkbTypes.PolygonGeometry
+
+# GROOTS: themakleuren KLIC (gelijk aan EisVoorzorgsmaatregel.qml), gebruikt
+# voor afgeleide lagen zoals 'Maatvoering (lijn)' waarvoor geen QML bestaat.
+THEMA_KLEUREN = (('buisleidingGevaarlijkeInhoud', '#ff7f00'),
+                 ('datatransport', '#00ff00'),
+                 ('gasHogeDruk', '#ffaf3c'),
+                 ('gasLageDruk', '#ffd750'),
+                 ('landelijkHoogspanningsnet', '#ff0000'),
+                 ('hoogspanning', '#ff0000'),
+                 ('middenspanning', '#c80000'),
+                 ('laagspanning', '#960000'),
+                 ('petrochemie', '#b64a00'),
+                 ('rioolVrijverval', '#ba38a8'),
+                 ('rioolOnderOverOfOnderdruk', '#800080'),
+                 ('warmte', '#008080'),
+                 ('water', '#0000ff'),
+                 ('wees', '#918a6f'),
+                 ('overig', '#6f5c10'),
+                 ('Topo', '#808080'),
+                 ('topo', '#808080'))
+
+# vaste kleur en lijndikte (mm) per basislaag; None = themakleur
+AFGELEIDE_STIJL = {'Maatvoering': ('#000000', 0.13),
+                   'Annotatie': ('#000000', 0.13),
+                   'EigenTopografie': ('#666666', 0.28)}
+AFGELEIDE_STIJL_STANDAARD = (None, 0.28)
+
+# herkent "thema" = 'x' en "thema" IN ('x','y') in filterexpressies
+_THEMA_RE = re.compile(r'"thema"\s*(?:=\s*\'([^\']*)\'|IN\s*\(([^)]*)\))',
+                       re.IGNORECASE)
+
+
+def _rule_themes(expression):
+    """Geeft de thema's (kleine letters) waarop een regel filtert."""
+    themes = set()
+    for match in _THEMA_RE.finditer(expression or ''):
+        if match.group(1) is not None:
+            themes.add(match.group(1).strip().lower())
+        else:
+            for item in match.group(2).split(','):
+                themes.add(item.strip().strip("'").strip().lower())
+    return themes
 
 class Iface(object):
     def __init__(self, iface):
         self.__iface = iface
         self.__path = os.path.dirname(os.path.realpath(__file__))
+        # GROOTS: lagengroep waarin nieuwe lagen van dit bericht komen
+        self.groupName = None
 
     def _iface(self):
         """return private attribute iface"""
@@ -90,34 +143,108 @@ class Iface(object):
         layer = None
         project = core.QgsProject.instance()
         layers = project.mapLayersByName(a_name)
+        # GROOTS: alleen eigen tijdelijke lagen (of PNG-rasters) hergebruiken.
+        # Een GeoPackage- of andere laag met dezelfde naam mag nooit gevuld
+        # worden met objecten van een nieuwe levering.
+        layers = [l for l in layers
+                  if l.providerType() in ('memory', 'gdal')]
         if len(layers) == 1:
             layer = layers[0]
         return layer
 
+    def isInProject(self, layer):
+        """GROOTS: staat deze laag (nog) in het project?"""
+        if layer is None:
+            return False
+        try:
+            layer_id = layer.id()
+        except RuntimeError:
+            # onderliggend C++-object is al verwijderd
+            return False
+        return core.QgsProject.instance().mapLayer(layer_id) is not None
+
     def addLayer(self, wvLayer):
         """add layer to map and return the layer"""
+        project = core.QgsProject.instance()
         if wvLayer.is_vector():
             a_layer = wvLayer.layer
-            provider = a_layer.dataProvider()
-            provider.addAttributes(wvLayer.fields)
-            a_layer.updateFields()
-            project = core.QgsProject.instance()
-            layer = project.addMapLayer(a_layer, True)
-            self.styleLayer(layer)
+            if a_layer.providerType() == 'memory':
+                provider = a_layer.dataProvider()
+                provider.addAttributes(wvLayer.fields)
+                a_layer.updateFields()
+                self.styleLayer(a_layer)
+            # GeoPackage-lagen houden hun opgeslagen stijl
         else:
             layerFile = wvLayer.layerFile
-            layer = self.iface.addRasterLayer(layerFile)
+            name = os.path.splitext(os.path.basename(layerFile))[0]
+            a_layer = core.QgsRasterLayer(layerFile, name)
+            if not a_layer.isValid():
+                return None
+        layer = project.addMapLayer(a_layer, False)
+        if layer is None:
+            return None
+        self._group().insertLayer(0, layer)
         return layer
+
+    def _group(self):
+        """GROOTS: groep van het bericht (wordt bovenaan aangemaakt)"""
+        root = core.QgsProject.instance().layerTreeRoot()
+        if not self.groupName:
+            return root
+        group = root.findGroup(self.groupName)
+        if group is None:
+            group = root.insertGroup(0, self.groupName)
+        return group
+
+    def removeGroup(self, group_name):
+        """GROOTS: verwijder de groep van een bericht als die leeg is"""
+        root = core.QgsProject.instance().layerTreeRoot()
+        group = root.findGroup(group_name)
+        if group is not None and len(group.children()) == 0:
+            root.removeChildNode(group)
 
     def addFeatures(self, wvLayer):
         """add features to given layer"""
         features = []
-        if wvLayer.is_vector():
-            a_layer = wvLayer.layer        
+        if wvLayer.is_vector() and wvLayer.features:
+            a_layer = wvLayer.layer
             provider = a_layer.dataProvider()
             isAdded, features = provider.addFeatures(wvLayer.features)
             a_layer.updateExtents()
+            # GROOTS: stijl opnieuw toepassen en alleen regels houden voor
+            # thema's die in de laag voorkomen (ook na een tweede levering)
+            self.styleLayer(a_layer)
+            self.pruneThemeRules(a_layer)
         return features
+
+    def pruneThemeRules(self, a_layer):
+        """Verwijder regels uit een regelgebaseerde stijl voor thema's die
+        niet in de laag voorkomen. Zo toont de legenda van bijv.
+        Rioolleiding alleen de riool-thema's."""
+        renderer = a_layer.renderer()
+        if not isinstance(renderer, core.QgsRuleBasedRenderer):
+            return
+        index = a_layer.fields().indexOf('thema')
+        if index < 0:
+            return
+        present = set()
+        for value in a_layer.uniqueValues(index):
+            if value is not None and str(value) != 'NULL':
+                present.add(str(value).lower())
+        self._pruneRule(renderer.rootRule(), present)
+        a_layer.triggerRepaint()
+        try:
+            self.iface.layerTreeView().refreshLayerSymbology(a_layer.id())
+        except AttributeError:
+            pass
+
+    def _pruneRule(self, rule, present):
+        for child in list(rule.children()):
+            themes = _rule_themes(child.filterExpression())
+            if themes and not child.isElse() and not (themes & present):
+                rule.removeChild(child)
+            else:
+                self._pruneRule(child, present)
 
     def styleLayer(self, a_layer):
         """
@@ -128,11 +255,48 @@ class Iface(object):
         qml_file = os.path.join(qml_path, a_layer.name()) + '.qml'
         if os.path.exists(qml_file):
             a_layer.loadNamedStyle(qml_file)
+            return
+        name = a_layer.name()
+        if name.endswith(')') and ' (' in name:
+            self._styleDerivedLayer(a_layer, name.split(' (')[0])
+
+    def _styleDerivedLayer(self, a_layer, base_name):
+        """Stijl voor afgeleide laag (bijv. 'Maatvoering (lijn)'): een regel
+        per thema, zodat aan/uitzetten per thema blijft werken. Maten in mm."""
+        fixed_color, width = AFGELEIDE_STIJL.get(base_name,
+                                                 AFGELEIDE_STIJL_STANDAARD)
+        geom_type = a_layer.geometryType()
+        root = core.QgsRuleBasedRenderer.Rule(None)
+        for thema, kleur in THEMA_KLEUREN:
+            symbol = self._derivedSymbol(geom_type, fixed_color or kleur, width)
+            rule = core.QgsRuleBasedRenderer.Rule(
+                symbol, filterExp="\"thema\" = '%s'" % thema, label=thema)
+            root.appendChild(rule)
+        symbol = self._derivedSymbol(geom_type, fixed_color or '#000000', width)
+        else_rule = core.QgsRuleBasedRenderer.Rule(symbol, label='overig thema')
+        else_rule.setIsElse(True)
+        root.appendChild(else_rule)
+        a_layer.setRenderer(core.QgsRuleBasedRenderer(root))
+
+    def _derivedSymbol(self, geom_type, kleur, width):
+        if geom_type == _GEOM_LINE:
+            return core.QgsLineSymbol.createSimple(
+                {'line_color': kleur, 'line_width': str(width),
+                 'line_width_unit': 'MM', 'capstyle': 'round'})
+        if geom_type == _GEOM_POLYGON:
+            return core.QgsFillSymbol.createSimple(
+                {'style': 'no', 'outline_color': kleur,
+                 'outline_width': str(width), 'outline_width_unit': 'MM'})
+        return core.QgsMarkerSymbol.createSimple(
+            {'name': 'circle', 'color': kleur, 'size': '1',
+             'size_unit': 'MM', 'outline_style': 'no'})
 
     def setVisibilityForLayer(self, wvLayer, visibility,
                               show_raster, show_vector, theme = None):
         """change the visibility for one layer"""
         layer = wvLayer.layer
+        if not self.isInProject(layer):
+            return
         if wvLayer.is_vector():
             if show_vector and theme is not None:
                 renderer = layer.renderer()
@@ -150,6 +314,8 @@ class Iface(object):
         """returns boolean, true if layer is visible false if not"""
         visibility = None
         layer = wvLayer.layer
+        if not self.isInProject(layer):
+            return 0
         # check current visibility
         if wvLayer.is_vector() and theme is not None:
             visibility = self._visibility_for_layer_theme(layer, theme)
@@ -159,14 +325,21 @@ class Iface(object):
 
     def isLayerVisible(self, layer):
         tree_layer = self._treeLayer(layer)
+        if tree_layer is None:
+            # laag is uit het project verwijderd
+            return 0
         value = tree_layer.isVisible()
         return value
 
     def setLayerVisible(self, layer, visibility):
         tree_layer = self._treeLayer(layer)
+        if tree_layer is None:
+            return
         tree_layer.setItemVisibilityChecked(visibility)
 
     def _treeLayer(self, layer):
+        if not self.isInProject(layer):
+            return None
         root_group = self.iface.layerTreeView().layerTreeModel().rootGroup()
         return root_group.findLayer(layer.id())
 
@@ -222,23 +395,36 @@ class Iface(object):
 
     def gotoLayer(self, wvLayer):
         """ goto extent of given layer """
+        # GROOTS: zelf naar de extent zoomen. iface.zoomToActiveLayer()
+        # crashte QGIS direct na het sluiten en heropenen van een
+        # GeoPackage-bericht (access violation).
         lyr = wvLayer.layer
-        self.iface.setActiveLayer(lyr)
-        self.iface.zoomToActiveLayer()
+        if not self.isInProject(lyr):
+            return
+        extent = lyr.extent()
+        if extent.isNull() or extent.isEmpty():
+            return
+        canvas = self.iface.mapCanvas()
+        transform = core.QgsCoordinateTransform(
+            lyr.crs(), canvas.mapSettings().destinationCrs(),
+            core.QgsProject.instance())
+        try:
+            extent = transform.transformBoundingBox(extent)
+        except core.QgsCsException:
+            return
+        extent.scale(1.05)
+        canvas.setExtent(extent)
+        canvas.refresh()
 
     def removeLayer(self, wvLayer):
         """ remove layer from QGIS map registry"""
         lyr = wvLayer.layer
-        remove = True
-        if wvLayer.is_vector():
-            lyr.startEditing()
-            lyr.deleteFeatures(wvLayer.featureIds)
-            lyr.commitChanges()
-            if lyr.hasFeatures():
-                remove = False
-        if remove:      
-            project = core.QgsProject.instance()
-            project.removeMapLayer(lyr)
+        if not self.isInProject(lyr):
+            # al door de gebruiker verwijderd
+            return
+        # GROOTS: elk bericht heeft eigen lagen, dus de hele laag gaat uit
+        # het project. Objecten in een GeoPackage worden nooit verwijderd.
+        core.QgsProject.instance().removeMapLayer(lyr)
 
     def bestScale(self, wvLayer):
         """Set best scale for given layer"""

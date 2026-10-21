@@ -159,8 +159,11 @@ class Layer(PY3__cmp__):
         # when vector point above line above area
         if self.is_vector():
             geometry_types = basis.B_Field.GEOMETRY_TYPES
-            this_index = geometry_types.index(self.vectorType)
-            other_index = geometry_types.index(other.vectorType)
+            n_types = len(geometry_types)
+            this_index = (geometry_types.index(self.vectorType)
+                          if self.vectorType in geometry_types else n_types)
+            other_index = (geometry_types.index(other.vectorType)
+                           if other.vectorType in geometry_types else n_types)
         else:
             index=0
             for compareStr in self.layerPriority:
@@ -208,10 +211,10 @@ class Layer(PY3__cmp__):
         iface = self._iface()
         layer = None
         if iface != None:
-            layer = iface.layerByName(self.layerName)
-            if layer is None:
-                layer = iface.addLayer(self)
-            
+            # GROOTS: elk bericht krijgt eigen lagen in een eigen groep;
+            # lagen worden niet meer op naam gedeeld tussen berichten
+            layer = iface.addLayer(self)
+
         if layer is not None:
             self.layer = layer
             self.layerName = layer.name()
@@ -221,6 +224,12 @@ class Layer(PY3__cmp__):
                 feature_ids = [feature.id() for feature in features]
                 self.__featureIds = feature_ids
             self.__visible = True
+
+    def detachFeatures(self):
+        """GROOTS: vergeet de feature-id's, bijv. nadat de laag naar een
+        GeoPackage is omgezet. Verwijderen van het bericht laat de laag dan
+        ongemoeid."""
+        self.__featureIds = []
 
     def pickle(self):
         """
@@ -354,6 +363,10 @@ class Layer(PY3__cmp__):
         """
         group_name = ""
         layer_name = self.layerName
+        # GROOTS: afgeleide lagen 'Maatvoering (lijn)' horen bij de groep
+        # van hun basislaag
+        if layer_name and layer_name.endswith(')') and ' (' in layer_name:
+            layer_name = layer_name.split(' (')[0]
 ##        print "layer_name:", layer_name
         if self.vectorType:
             if layer_name in ('Annotatie', 'Maatvoering'):
@@ -371,7 +384,8 @@ class Layer(PY3__cmp__):
         return group_name
 
     def qgisVectorType(self):
-        qgisVectorTypes = {'POLYGON': 'Polygon',
+        qgisVectorTypes = {'MULTIPOLYGON': 'MultiPolygon',
+                           'POLYGON': 'Polygon',
                            'LINESTRING': 'LineString',
                            'MULTILINESTRING': 'MultiLineString',
                            'POINT': 'Point'}

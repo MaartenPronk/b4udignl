@@ -28,12 +28,16 @@ from __future__ import absolute_import
 from builtins import str
 from qgis.PyQt.QtCore import QSettings, pyqtSlot
 from qgis.PyQt.QtWidgets import QDialog, QFileDialog, QMessageBox, QListWidgetItem, QTreeWidgetItem
+from qgis.PyQt.QtWidgets import QPushButton, QApplication, QProgressDialog
+from qgis.PyQt.QtCore import Qt
 from qgis import utils
 from qgis.core import QgsProject
 from .ui_B4UdigNL import Ui_B4UdigNL
 from ifaceqgis import Iface
 import os, gc
 from .core import wv
+from .core import gpkg_export
+from .core import gpkg_doc
 import unzip, zipfile, pickle
 
 # create the dialog
@@ -76,6 +80,7 @@ class B4UdigNLDialog(QDialog):
         self.__settings = self._userSettings()
         self.ui = Ui_B4UdigNL()
         self.ui.setupUi(self)
+        self._addGpkgButton()
         self._themes2checkboxes()
         self.updateUi()
         self.makeConnections()
@@ -83,6 +88,136 @@ class B4UdigNLDialog(QDialog):
 
     def doc(self):
         return self.__wv
+
+    # GROOTS: KLIC opslaan als GeoPackage met stijlen
+    def _addGpkgButton(self):
+        open_button = QPushButton(self.tr("Open KLIC-GeoPackage"),
+                                  self.ui.messageBox)
+        open_button.setObjectName("openGpkgButton")
+        open_button.setToolTip(self.tr("Open een eerder als GeoPackage "
+                                       "opgeslagen KLIC-bericht"))
+        self.ui.horizontalLayout.addWidget(open_button)
+        open_button.clicked.connect(self._openGeoPackage)
+        self.ui.openGpkgButton = open_button
+        button = QPushButton(self.tr("Opslaan als GeoPackage"),
+                             self.ui.messageBox)
+        button.setObjectName("saveGpkgButton")
+        button.setToolTip(self.tr("Schrijf alle KLIC-lagen van het "
+                                  "geselecteerde bericht naar een "
+                                  "GeoPackage, inclusief stijlen"))
+        self.ui.horizontalLayout_2.addWidget(button)
+        button.clicked.connect(self._saveAsGeoPackage)
+        self.ui.saveGpkgButton = button
+
+    def _openGeoPackage(self):
+        l_path, __ = QFileDialog.getOpenFileName(
+            self, self.tr("Open KLIC-GeoPackage"), self._start_find_path(),
+            self.tr("GeoPackage (*.gpkg)"))
+        if not l_path:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            doc = gpkg_doc.GpkgDoc(l_path)
+        except IOError as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, self.tr("Open KLIC-GeoPackage"),
+                                self.tr("Dit bestand kan niet als KLIC-"
+                                        "bericht worden geopend:\n%s") % e)
+            return
+        QApplication.restoreOverrideCursor()
+        QSettings().setValue("b4udignl/dir_last_used",
+                             os.path.dirname(l_path))
+        self._addDoc(doc, check_evs=False)
+
+    def _findDoc(self, klicnummer):
+        for i_doc in self.__wvs:
+            if i_doc.klicnummer == klicnummer:
+                return i_doc
+        return None
+
+    def _addDoc(self, doc, check_evs=True):
+        """GROOTS: voeg een geopend bericht (XML of GeoPackage) toe,
+        laad de lagen in een eigen groep en werk het venster bij."""
+        existing = self._findDoc(doc.klicnummer)
+        if existing is not None:
+            QMessageBox.information(
+                self, self.tr("KLIC-bericht"),
+                self.tr("Bericht %s is al geopend. Sluit het eerst als je "
+                        "het opnieuw wilt laden.") % doc.klicnummer)
+            self.__wv = existing
+            self._populateMsgList()
+            return
+        doc.iface = Iface(self.__iface)
+        self.__wvs.append(doc)
+        self.__wv = doc
+        self._populateMsgList()
+        self._populateTree()
+        l_iface = doc.iface
+        l_iface.doRendering(False)
+        self._loadLayers()
+        l_iface.refreshLegend()
+        self._setStateOfVisibilitiesThemes()
+        self._setVisibilities()
+        l_iface.doRendering(True)
+        doc.goto()
+        if check_evs:
+            self._checkEvs()
+
+    def _saveAsGeoPackage(self):
+        doc = self.doc()
+        if doc is None:
+            QMessageBox.information(self, self.tr("Opslaan als GeoPackage"),
+                                    self.tr("Laad of selecteer eerst een "
+                                            "KLIC-bericht."))
+            return
+        l_path, __ = QFileDialog.getSaveFileName(
+            self, self.tr("KLIC opslaan als GeoPackage"),
+            gpkg_export.default_path(doc),
+            self.tr("GeoPackage (*.gpkg)"))
+        if not l_path:
+            return
+        if not l_path.lower().endswith(".gpkg"):
+            l_path += ".gpkg"
+        answer = QMessageBox.question(
+            self, self.tr("Opslaan als GeoPackage"),
+            self.tr("Wil je dat de lagen in het project daarna naar de "
+                    "GeoPackage wijzen?\n\nDan kun je het project opslaan "
+                    "zonder tijdelijke lagen."),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        replace = answer == QMessageBox.Yes
+        if gpkg_export.is_source_of(doc, l_path):
+            QMessageBox.warning(self, self.tr("Opslaan als GeoPackage"),
+                                self.tr("Dit bericht komt al uit dit "
+                                        "bestand. Kies een andere naam."))
+            return
+        progress = QProgressDialog(self.tr("KLIC wegschrijven..."), None,
+                                   0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        def report(index, total, name):
+            progress.setMaximum(max(total, 1))
+            progress.setValue(index)
+            progress.setLabelText(self.tr("Wegschrijven: %s") % name)
+            QApplication.processEvents()
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            written = gpkg_export.export_doc(doc, l_path, replace, report)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            progress.close()
+            QMessageBox.warning(self, self.tr("Opslaan als GeoPackage"),
+                                self.tr("Opslaan is mislukt:\n%s") % e)
+            return
+        QApplication.restoreOverrideCursor()
+        progress.close()
+        n_features = sum(item[2] for item in written)
+        msg = self.tr("%d lagen met %d objecten opgeslagen in:\n%s") % (
+            len(written), n_features, l_path)
+        if any(not layer.is_vector() for layer in (doc.layersSorted() or [])):
+            msg += self.tr("\n\nRasterbijlagen (PNG) zijn niet opgenomen.")
+        QMessageBox.information(self, self.tr("Opslaan als GeoPackage"), msg)
 
     def layerGroupNames(self):
         """returns dictionary with legend groups"""
@@ -315,9 +450,12 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
             ui.vectorCheckBox.setEnabled(False)
             ui.openMsgButton.setEnabled(True)
             ui.openArchiveButton.setEnabled(True)
+            ui.saveGpkgButton.setEnabled(False)
         else:
-            ui.openMsgButton.setEnabled(False)
-            ui.openArchiveButton.setEnabled(False)
+            # GROOTS: meerdere berichten naast elkaar openen
+            ui.openMsgButton.setEnabled(True)
+            ui.openArchiveButton.setEnabled(True)
+            ui.saveGpkgButton.setEnabled(True)
             ui.gotoButton.setEnabled(True)
             ui.bestScaleButton.setEnabled(True)
             ui.removeMsgButton.setEnabled(True)
@@ -519,7 +657,7 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
         l_doc.removeLayers()
         l_mapCanvas.setRenderFlag(True)
         # remove doc, populate message list, populate tree when neccesary
-        self.__wvs.remove(self.__wv)
+        self.__wvs.remove(l_doc)
         self.__wv = next(iter(self.__wvs), None)
         self._populateMsgList()
         self._populateTree()
@@ -552,19 +690,7 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
         doc = self._openMsg()
         if doc is None:
             return
-        doc.iface = Iface(self.__iface)
-        self.__wvs.append(doc)
-        self.__wv = doc
-        self._populateMsgList()
-        self._populateTree()
-        l_iface = doc.iface
-        l_iface.doRendering(False)
-        self._loadLayers()
-        l_iface.refreshLegend()
-        self._setStateOfVisibilitiesThemes()
-        self._setVisibilities()
-        l_iface.doRendering(True)
-        self._checkEvs()
+        self._addDoc(doc)
 
     def _loadLayers(self):
         doc = self.doc()
@@ -585,15 +711,67 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
         """
         #self._displayFolderToProcess()        
         doc = None
+        # GROOTS: zoek de map met de levering (ook een submap), en geef een
+        # duidelijke melding als er geen levering in staat
+        l_dir = self._findDeliveryDir(self.__dir)
+        if l_dir is None:
+            self._displayNoDelivery(self.__dir)
+            return None
+        if l_dir != self.__dir:
+            self.__dir = l_dir
+            QSettings().setValue("b4udignl/dir_last_used", l_dir)
         try:
             doc = wv.Doc(self.__dir)
         except IOError:
             self._displayWrongMsg()
             return None
+        except KeyError:
+            # XML gevonden, maar geen gebiedsinformatieaanvraag erin
+            self._displayNoDelivery(self.__dir)
+            return None
         if doc.version is None:
             self._displayWrongMsg()
             return None
         return doc
+
+    @staticmethod
+    def _hasDeliveryXml(p_dir):
+        """True als de map XML-bestanden van een levering bevat
+        (zelfde selectie als wv.Doc._xml_files)."""
+        try:
+            names = os.listdir(p_dir)
+        except OSError:
+            return False
+        return any(".xml" in n and ".aux.xml" not in n and
+                   os.path.isfile(os.path.join(p_dir, n)) for n in names)
+
+    def _findDeliveryDir(self, p_dir):
+        """GROOTS: geeft de map met de levering terug. Staat de XML niet in
+        de gekozen map maar wel in precies een submap (zoals na uitpakken
+        van de zip in een map met dezelfde naam), dan wordt die submap
+        gebruikt. Geen levering gevonden: None."""
+        if p_dir is None:
+            return None
+        if self._hasDeliveryXml(p_dir):
+            return p_dir
+        try:
+            subdirs = [os.path.join(p_dir, n) for n in os.listdir(p_dir)
+                       if os.path.isdir(os.path.join(p_dir, n))]
+        except OSError:
+            return None
+        candidates = [d for d in subdirs if self._hasDeliveryXml(d)]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def _displayNoDelivery(self, p_dir):
+        """GROOTS: melding als er geen KLIC-levering in de map staat"""
+        l_title = self.tr("Geen KLIC-levering gevonden")
+        l_msg = self.tr("In deze map (en de submappen direct eronder) staat "
+                        "geen KLIC-levering:\n%s\n\nKies de map waarin het "
+                        "bestand GI_gebiedsinformatielevering_....xml "
+                        "staat.") % p_dir
+        QMessageBox.warning(self, l_title, l_msg)
 
     def _displayFolderToProcess(self):
         """
@@ -649,6 +827,10 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
         l_selected = None
         l_ui = self.ui
         l_list = l_ui.msgListWidget
+        # GROOTS: tijdens het opbouwen geen selectie-signalen; anders maakt
+        # Qt het bovenste bericht actief en worden de lagen van het verkeerde
+        # bericht geladen
+        l_list.blockSignals(True)
         l_list.clear()
         for i_doc in self.__wvs:
 ##            QMessageBox.information(self, "Add message",
@@ -659,8 +841,9 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
             if l_klicnummer == self.doc().klicnummer:
                 l_selected = l_item
         if l_selected is not None:
-            l_selected.setSelected(True)
             l_list.setCurrentItem(l_selected)
+            l_selected.setSelected(True)
+        l_list.blockSignals(False)
 
     def _populateTree(self):
         """populates tree with pdf document provided in DigAlert message"""
