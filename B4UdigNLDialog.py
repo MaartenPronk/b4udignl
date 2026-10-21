@@ -112,7 +112,7 @@ class B4UdigNLDialog(QDialog):
             self.tr("GeoPackage (*.gpkg)"))
         if not l_path:
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             doc = gpkg_doc.GpkgDoc(l_path)
         except IOError as e:
@@ -180,8 +180,9 @@ class B4UdigNLDialog(QDialog):
             self.tr("Wil je dat de lagen in het project daarna naar de "
                     "GeoPackage wijzen?\n\nDan kun je het project opslaan "
                     "zonder tijdelijke lagen."),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-        replace = answer == QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        replace = answer == QMessageBox.StandardButton.Yes
         if gpkg_export.is_source_of(doc, l_path):
             QMessageBox.warning(self, self.tr("Opslaan als GeoPackage"),
                                 self.tr("Dit bericht komt al uit dit "
@@ -189,7 +190,7 @@ class B4UdigNLDialog(QDialog):
             return
         progress = QProgressDialog(self.tr("KLIC wegschrijven..."), None,
                                    0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
         def report(index, total, name):
@@ -198,7 +199,7 @@ class B4UdigNLDialog(QDialog):
             progress.setLabelText(self.tr("Wegschrijven: %s") % name)
             QApplication.processEvents()
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             written = gpkg_export.export_doc(doc, l_path, replace, report)
         except Exception as e:

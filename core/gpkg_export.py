@@ -24,6 +24,12 @@ TABEL_METADATA = "klic_metadata"
 TABEL_LAGEN = "klic_lagen"
 TABEL_BIJLAGEN = "klic_bijlagen"
 
+# QGIS 3 en 4: enums zijn in QGIS 4 alleen nog via hun scope bereikbaar
+_ACTION = getattr(QgsVectorFileWriter, "ActionOnExistingFile",
+                  QgsVectorFileWriter)
+_WRITER_ERROR = getattr(QgsVectorFileWriter, "WriterError",
+                        QgsVectorFileWriter)
+
 
 def table_name(layer_name):
     """'Maatvoering (lijn)' -> 'Maatvoering_lijn'"""
@@ -58,15 +64,15 @@ def _write_layer(q_layer, gpkg_path, table, first):
     options.fileEncoding = "UTF-8"
     if first and os.path.exists(gpkg_path):
         options.actionOnExistingFile = \
-            QgsVectorFileWriter.CreateOrOverwriteFile
+            _ACTION.CreateOrOverwriteFile
     elif os.path.exists(gpkg_path):
         options.actionOnExistingFile = \
-            QgsVectorFileWriter.CreateOrOverwriteLayer
+            _ACTION.CreateOrOverwriteLayer
     context = QgsProject.instance().transformContext()
     result = QgsVectorFileWriter.writeAsVectorFormatV3(q_layer, gpkg_path,
                                                        context, options)
     error, message = result[0], result[1]
-    if error != QgsVectorFileWriter.NoError:
+    if error != _WRITER_ERROR.NoError:
         raise IOError("Laag '%s' niet weggeschreven: %s"
                       % (q_layer.name(), message))
 
