@@ -29,6 +29,35 @@ from . import imkl
 from .wv_objects import Rectangle, Company, Person, Theme, PdfFile, Layer
 from qgis.PyQt.QtCore import QVariant
 from qgis.core import QgsVectorLayer, QgsField, QgsFeature, QgsGeometry
+from qgis.core import QgsWkbTypes
+
+try:
+    # QGIS >= 3.30 en QGIS 4
+    from qgis.core import Qgis
+    _GEOM_POINT = Qgis.GeometryType.Point
+    _GEOM_LINE = Qgis.GeometryType.Line
+    _GEOM_POLYGON = Qgis.GeometryType.Polygon
+except AttributeError:
+    _GEOM_POINT = QgsWkbTypes.PointGeometry
+    _GEOM_LINE = QgsWkbTypes.LineGeometry
+    _GEOM_POLYGON = QgsWkbTypes.PolygonGeometry
+
+# GROOTS: een IMKL-objecttype kan in de levering meerdere geometrietypen hebben
+# (bijv. Maatvoering als punt, lijn en pijl). Een QGIS-laag heeft er maar een.
+# Objecten met een afwijkend geometrietype gaan naar een eigen laag
+# '<objecttype> (lijn|vlak|punt)'. Lijn- en vlaklagen zijn multi-geometrie,
+# zodat ook MultiSurface/MultiCurve uit de levering past.
+_KIND_OF_FIELD_TYPE = {'POINT': 'punt',
+                       'LINESTRING': 'lijn',
+                       'MULTILINESTRING': 'lijn',
+                       'POLYGON': 'vlak',
+                       'MULTIPOLYGON': 'vlak'}
+_KIND_OF_GEOMETRY = {_GEOM_POINT: 'punt',
+                     _GEOM_LINE: 'lijn',
+                     _GEOM_POLYGON: 'vlak'}
+_VECTOR_TYPE_OF_KIND = {'punt': 'POINT',
+                        'lijn': 'MULTILINESTRING',
+                        'vlak': 'MULTIPOLYGON'}
 
 
 class Storage(object):
@@ -574,29 +603,66 @@ class Storage2(Storage):
         return pdfFile
                     
     def _add_feature_to_layer(self, imkl_object):
-        if imkl_object.name not in self.layers.keys():
-            self._create_layer_from_imkl(imkl_object)
-        layer = self.layers[imkl_object.name]
+        geom_field = imkl_object.geometry_field()
+        if geom_field.value is None:
+            return
+        try:
+            geometry = QgsGeometry.fromWkt(geom_field.value)
+        except TypeError:
+            return
+        layer_name, kind = self._layer_name_for_geometry(imkl_object, geometry)
+        if layer_name not in self.layers.keys():
+            self._create_layer_from_imkl(imkl_object, layer_name, kind)
+        layer = self.layers[layer_name]
         feature = QgsFeature()
         fields = imkl_object.attribute_fields()
         theme_field = imkl_object.field("thema")
         if theme_field is not None:
-            layer.addVisibility(theme_field.value)        
-        geom_field = imkl_object.geometry_field()
-        if geom_field.value is not None:
-            try:
-                feature.setGeometry(QgsGeometry.fromWkt(geom_field.value))
-                values = [field.value for field in fields]
-                feature.setAttributes(values)
-                layer.features.append(feature)
-            except TypeError: pass
+            layer.addVisibility(theme_field.value)
+        try:
+            feature.setGeometry(self._fit_geometry_to_kind(geometry, kind))
+            values = [field.value for field in fields]
+            feature.setAttributes(values)
+            layer.features.append(feature)
+        except TypeError: pass
 
-    def _create_layer_from_imkl(self, imkl_object):
+    def _layer_name_for_geometry(self, imkl_object, geometry):
+        """Geeft (laagnaam, soort) voor dit object. Soort is punt, lijn of vlak.
+        Wijkt het geometrietype af van het type uit het IMKL-model, dan krijgt
+        het object een eigen laag '<naam> (<soort>)'."""
+        name = imkl_object.name
+        field_type = imkl_object.geometry_field().type
+        declared_kind = _KIND_OF_FIELD_TYPE.get(field_type, 'punt')
+        if geometry is None or geometry.isNull() or geometry.isEmpty():
+            return name, declared_kind
+        actual_kind = _KIND_OF_GEOMETRY.get(geometry.type())
+        if actual_kind is None or actual_kind == declared_kind:
+            return name, declared_kind
+        return "%s (%s)" % (name, actual_kind), actual_kind
+
+    def _fit_geometry_to_kind(self, geometry, kind):
+        """Maak geometrie passend voor de laag: multi voor lijn en vlak,
+        enkelvoudig voor punt (als dat zonder verlies kan)."""
+        if geometry is None or geometry.isNull():
+            return geometry
+        if kind in ('lijn', 'vlak'):
+            if not geometry.isMultipart():
+                geometry.convertToMultiType()
+        elif geometry.isMultipart():
+            if geometry.constGet().partCount() == 1:
+                geometry.convertToSingleType()
+        return geometry
+
+    def _create_layer_from_imkl(self, imkl_object, name=None, kind=None):
         """create a layer from imkl and add it to self.layers"""
         layer = Layer(self)
-        name = imkl_object.name
+        if name is None:
+            name = imkl_object.name
         layer.layerName = name
-        vector_type = imkl_object.geometry_field().type
+        if kind is None:
+            vector_type = imkl_object.geometry_field().type
+        else:
+            vector_type = _VECTOR_TYPE_OF_KIND[kind]
         layer.vectorType = vector_type
         theme_field = imkl_object.field("thema")
         if theme_field is not None:

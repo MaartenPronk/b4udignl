@@ -238,7 +238,7 @@ def aanduidingEisVoorzorgsmaatregel():
     obj.add_field(B_Field("netbeheerderWerkAanduiding", "TEXT", "NetbeheerderWerkAanduiding"))
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POLYGON", "Geometrie",
-                          to_object=gml.Polygon))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -256,7 +256,7 @@ def annotatie():
                           "Labelpositie", to_object=labelpositie))
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
-                          to_object=gml.Point))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -274,7 +274,7 @@ def maatvoering():
                           "Labelpositie", to_object=labelpositie))
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
-                          to_object=gml.Point))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -602,7 +602,7 @@ def eigenTopografie():
                           "TypeTopografischObject",
                           from_attribute='Href'))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
-                          to_object=gml.Point))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -614,7 +614,7 @@ def extraGeometrie():
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("object", "TEXT", "Object"))
     obj.add_field(B_Field("geometry", "POLYGON", "Vlakgeometrie2D",
-                          to_object=gml.Polygon))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -636,7 +636,7 @@ def extraDetailinfo():
     obj.add_field(B_Field("bestandIdentificator", "TEXT",
                           "BestandIdentificator"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
-                          to_object=gml.Point))
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 

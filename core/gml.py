@@ -253,3 +253,69 @@ class MultiPolygon(GmlBase):
             wkt += a_polygon.wkt_rings()
         wkt += ")"
         return wkt
+
+
+class MultiLineString(GmlBase):
+    """GROOTS: gml:MultiCurve / gml:MultiLineString naar WKT MultiLineString"""
+
+    def __init__(self):
+        GmlBase.__init__(self)
+        self.lines = []
+        for i_tag in ("MultiCurve", "MultiLineString", "CurveMember",
+                      "LineStringMember", "CurveMembers"):
+            self.add_tag_method_to_process(i_tag, self.process)
+        self.add_tag_method_to_process("LineString", self._process_line)
+        self.add_tag_method_to_process("Curve", self._process_line)
+
+    def _process_line(self, elem):
+        tag = clean_tag(elem.tag)
+        a_line = Curve() if tag == "Curve" else LineString()
+        # LineString/Curve.process verwacht het omhullende element
+        a_line.process([elem])
+        if a_line.coords:
+            self.lines.append(a_line.coords)
+
+    def as_wkt(self):
+        if not self.lines:
+            return None
+        return "MultiLineString(" + ",".join(
+            "(" + coords + ")" for coords in self.lines) + ")"
+
+
+class AnyGeometry(GmlBase):
+    """GROOTS: leest elk ondersteund GML-geometrietype onder een
+    geometrie-element (bijv. imkl:ligging). IMKL staat voor o.a. Maatvoering,
+    Annotatie, EigenTopografie en ExtraDetailinfo punt, lijn en vlak toe;
+    de oude parsers lazen per veld maar een type en gaven anders een lege
+    geometrie (bijv. 'Point()')."""
+
+    _PARSERS = {"Point": Point,
+                "LineString": LineString,
+                "Curve": Curve,
+                "Polygon": Polygon,
+                "MultiSurface": MultiPolygon,
+                "MultiPolygon": MultiPolygon,
+                "MultiCurve": MultiLineString,
+                "MultiLineString": MultiLineString}
+
+    def __init__(self):
+        GmlBase.__init__(self)
+        self.geometry = None
+
+    def process(self, elem):
+        for i_elem in elem:
+            tag = clean_tag(i_elem.tag)
+            parser = self._PARSERS.get(tag)
+            if parser is None:
+                continue
+            a_geometry = parser()
+            # alle parsers verwerken het omhullende element en zoeken zelf
+            # hun eigen GML-element op
+            a_geometry.process(elem)
+            self.geometry = a_geometry
+            break
+
+    def as_wkt(self):
+        if self.geometry is None:
+            return None
+        return self.geometry.as_wkt()

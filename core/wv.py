@@ -40,6 +40,7 @@ Author: Diethard Jansen, 14-3-2010
 from builtins import object
 import os
 import xml.etree.ElementTree as ET
+import gc
 from . import imkl, xml_utils
 from .wv_storage import Storage1, Storage2
 from .wv_objects import Theme, Layer
@@ -223,8 +224,11 @@ class Doc(object):
 
     def _parse_xml(self, xmlFile):
         """fill attributes of Doc from a given xml file"""
-        xml_stream = open(xmlFile, encoding="UTF-8")
-        xml_element = ET.fromstring(xml_stream.read())
+        # Streamend inlezen (ET.parse leest in blokken van 64 kB) in plaats van
+        # het hele bestand als één string aan expat te voeren. Dat laatste gaf
+        # 'ParseError: out of memory: line 1, column 0' bij grote KLIC-leveringen.
+        # De encoding wordt door expat uit de XML-declaratie/BOM bepaald.
+        xml_element = ET.parse(xmlFile).getroot()
         tag = xml_utils.clean_tag(xml_element.tag)
         if tag == imkl.LEVERINGSINFORMATIE:
             self._process_tag_to_object(xml_element)
@@ -246,7 +250,6 @@ class Doc(object):
             
             # fix_print_with_import
             print("not processed tag: ", tag)
-        xml_stream.close()
 
     def _process_feature_member(self, xml_element):
         for i_elem in xml_element:
@@ -530,13 +533,34 @@ class Doc(object):
                     f.write(self.rectangle.worldFileData())
                     f.close()
 
+    def groupName(self):
+        """GROOTS: naam van de lagengroep van dit bericht"""
+        name = self.klicnummer or os.path.basename(self.path)
+        return "KLIC %s" % name
+
     def loadLayers(self):
         """Load all layers into QGIS"""
         layers_sorted = self.layersSorted()
         if layers_sorted is None:
             return
+        if self.iface is not None:
+            self.iface.groupName = self.groupName()
         for layer in layers_sorted:
             layer.load()
+        self.releaseParseData()
+
+    def releaseParseData(self):
+        """GROOTS: geef na het laden het geheugen van het inlezen vrij.
+        De ingelezen IMKL-objecten en de kopie van de objecten die al in de
+        lagen staan zijn daarna niet meer nodig. Bij grote leveringen gaat
+        het om miljoenen Python-objecten (enkele GB)."""
+        # versie wordt lui bepaald uit de IMKL-objecten: eerst vastleggen
+        version = self.version
+        self._init_imkls()
+        for layer in list(self.layers.values()):
+            layer.features = []
+        gc.collect()
+        return version
 
     def layersSorted(self):
         dict_layers = self.layers
@@ -593,6 +617,10 @@ class Doc(object):
     def removeLayers(self):
         """
         removes all layers
+        GROOTS: haalt alle lagen en de groep van dit bericht uit het
+        project. Een GeoPackage-bestand blijft bestaan.
         """
         for i_layer in self.layers.values():
             i_layer.remove()
+        if self.iface is not None:
+            self.iface.removeGroup(self.groupName())
