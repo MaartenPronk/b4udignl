@@ -13,7 +13,7 @@ import os
 from qgis.core import QgsVectorLayer, QgsWkbTypes
 
 from .wv import Doc
-from .wv_objects import Layer, PdfFile, Theme
+from .wv_objects import Company, Layer, PdfFile, Person, Theme
 from . import gpkg_export
 
 try:
@@ -101,9 +101,42 @@ class GpkgDoc(Doc):
         self.storage.klicnummer = meta.get('klicnummer') or \
             os.path.splitext(os.path.basename(gpkg_path))[0]
         self.storage.meldingsoort = meta.get('meldingsoort')
+        self.aanvraagInfo = dict((k[len("aanvraag_"):], v)
+                                 for k, v in meta.items()
+                                 if k and k.startswith("aanvraag_"))
         self._load_layer_definitions(gpkg_path)
         self._load_attachments(gpkg_path)
+        self._load_netbeheerders(gpkg_path)
         self._build_themes()
+
+    def _load_netbeheerders(self, gpkg_path):
+        """GROOTS: contactgegevens netbeheerders terugzetten"""
+        companies = {}
+        for row in _rows(gpkg_path, gpkg_export.TABEL_NETBEHEERDERS):
+            code = _text(row.get('bronhoudercode')) or ''
+            company = companies.get(code)
+            if company is None:
+                company = Company(_text(row.get('netbeheerder')))
+                company.bronhoudercode = code
+                for naam in (_text(row.get('themas')) or '').split(','):
+                    if naam.strip():
+                        company.themes.append(Theme(self, naam.strip()))
+                companies[code] = company
+                self.storage.netOwners.append(company)
+            soort = _text(row.get('soort_contact'))
+            if not soort:
+                continue
+            person = Person(_text(row.get('naam')))
+            person.telephone = _text(row.get('telefoon'))
+            person.email = _text(row.get('email'))
+            if soort == 'beschadiging':
+                company.damageContact = person
+                company.telNrDamage = person.telephone
+            elif soort == 'netinformatie':
+                company.netInfoContact = person
+                company.telNrProblemIT = person.telephone
+            elif soort == 'aanvraag':
+                company.contactPerson = person
 
     def _load_layer_definitions(self, gpkg_path):
         rows = _rows(gpkg_path, gpkg_export.TABEL_LAGEN)

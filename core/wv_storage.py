@@ -502,6 +502,14 @@ class Storage2(Storage):
         netOwner = Company()
         netOwner.process_imkl_object(beheerder)
         id_belang = belanghebbende.field("idGeraaktBelang").value
+        # GROOTS: oriëntatie- en informatieverzoek gebruiken een andere tag
+        for alternatief in ("idGeraaktBelangOrientatie",
+                            "idGeraaktBelangInformatie"):
+            if id_belang in self.imkls_on_id:
+                break
+            field = belanghebbende.field(alternatief)
+            if field is not None:
+                id_belang = field.value
         if id_belang in self.imkls_on_id:
             belang = self.imkls_on_id[id_belang]
             netOwner.process_imkl_object(belang)

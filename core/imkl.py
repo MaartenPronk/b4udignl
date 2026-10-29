@@ -55,6 +55,7 @@ MANTELBUIS = "Mantelbuis"
 MAST = "Mast"
 OLIEGASCHEMICALIENPIJPLEIDING = "OlieGasChemicalienPijpleiding"
 ORIENTATIEPOLYGOON = "Orientatiepolygoon"
+INFORMATIEPOLYGOON = "Informatiepolygoon"
 OVERIG = "Overig"
 RIOOLLEIDING = "Rioolleiding"
 TECHNISCHGEBOUW = "TechnischGebouw"
@@ -104,8 +105,47 @@ def _imkl20_field(key):
                                             from_attribute='Href'),
         "netbeheerderNetAanduiding": lambda: B_Field(
             "netbeheerderNetAanduiding", "TEXT", "NetbeheerderNetAanduiding"),
+        "dieptelegging": lambda: B_ListField("dieptelegging", "TEXT",
+                                             "Dieptelegging",
+                                             from_attribute='Href'),
+        "heeftExtraInformatie": lambda: B_ListField(
+            "heeftExtraInformatie", "TEXT", "HeeftExtraInformatie",
+            from_attribute='Href'),
+        # velden die na het inlezen worden gevuld (geen eigen XML-element)
+        "standaardDieptelegging": lambda: B_Field(
+            "standaardDieptelegging", "TEXT", "_StandaardDieptelegging"),
+        "fictief": lambda: B_Field("fictief", "TEXT", "_Fictief"),
+        "labelHorizontaal": lambda: B_Field("labelHorizontaal", "TEXT",
+                                            "_LabelHorizontaal"),
+        "labelVerticaal": lambda: B_Field("labelVerticaal", "TEXT",
+                                          "_LabelVerticaal"),
+        "adresTekst": lambda: B_Field("adresTekst", "TEXT", "_AdresTekst"),
+        "geometrieBron": lambda: B_Field("geometrieBron", "TEXT",
+                                         "_GeometrieBron"),
+        "puntgeometrie25D": lambda: B_Field("puntgeometrie25D", "TEXT",
+                                            "Puntgeometrie2.5D",
+                                            to_object=gml.AnyGeometry),
+        "lijngeometrie25D": lambda: B_Field("lijngeometrie25D", "TEXT",
+                                            "Lijngeometrie2.5D",
+                                            to_object=gml.AnyGeometry),
+        "vlakgeometrie25D": lambda: B_Field("vlakgeometrie25D", "TEXT",
+                                            "Vlakgeometrie2.5D",
+                                            to_object=gml.AnyGeometry),
     }
     return fields[key]()
+
+class B_ListField(B_Field):
+    """GROOTS: veld dat bij herhaalde XML-elementen alle waarden bewaart,
+    gescheiden door ';' (bijv. meerdere verwijzingen naar dieptes)."""
+
+    def set_value_from_xml(self, xml_element):
+        previous = self.value
+        B_Field.set_value_from_xml(self, xml_element)
+        if previous not in (None, ''):
+            if self.value in (None, ''):
+                self.value = previous
+            else:
+                self.value = previous + ';' + self.value
 
 def _imkl20(obj, *keys):
     names = set(f.name for f in obj.fields)
@@ -146,6 +186,7 @@ def tag2function():
             MAST: mast,
             OLIEGASCHEMICALIENPIJPLEIDING: olieGasChemicalienPijpleiding,
             ORIENTATIEPOLYGOON: graafpolygoon,
+            INFORMATIEPOLYGOON: informatiepolygoon,
             OVERIG: overig,
             RIOOLLEIDING: rioolleiding,
             TECHNISCHGEBOUW: technischGebouw,
@@ -309,6 +350,7 @@ def annotatie():
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
                           to_object=gml.AnyGeometry))
+    _imkl20(obj, "labelHorizontaal", "labelVerticaal")
     obj.add_tags_to_process()
     return obj
 
@@ -327,6 +369,7 @@ def maatvoering():
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
                           to_object=gml.AnyGeometry))
+    _imkl20(obj, "labelHorizontaal", "labelVerticaal")
     obj.add_tags_to_process()
     return obj
 
@@ -433,6 +476,8 @@ def kabelOfLeiding():
     ## We read multiple LineString tags and create a MultiLineString!   
     obj.add_field(B_Field("geometry", "MULTILINESTRING", "CentrelineGeometry",
                           to_object=gml.LineString))
+    _imkl20(obj, "standaardDieptelegging", "fictief", "dieptelegging",
+            "heeftExtraInformatie")
     return obj
 
 def duct():
@@ -594,6 +639,7 @@ def utilityLink():
     obj.add_field(B_Field("verticalPosition", "TEXT", "VerticalPosition"))
     obj.add_field(B_Field("geometry", "LINESTRING", "CentrelineGeometry",
                           to_object=gml.Curve))
+    obj.add_field(B_Field("fictitious", "TEXT", "Fictitious"))
     obj.add_tags_to_process()
     return obj
 
@@ -615,6 +661,7 @@ def PuntOpNet():
     obj.add_field(B_Field("geom_id", "TEXT", "ExtraGeometrie",
                           from_attribute='Href'))
     obj.add_field(B_Field("label", "TEXT", "Label"))
+    _imkl20(obj, "dieptelegging", "heeftExtraInformatie")
     return obj
 
 def appurtenance():
@@ -695,6 +742,7 @@ def extraGeometrie():
     obj.add_field(B_Field("object", "TEXT", "Object"))
     obj.add_field(B_Field("geometry", "POLYGON", "Vlakgeometrie2D",
                           to_object=gml.AnyGeometry))
+    _imkl20(obj, "puntgeometrie25D", "lijngeometrie25D", "vlakgeometrie25D", "geometrieBron")
     obj.add_tags_to_process()
     return obj
 
@@ -718,6 +766,7 @@ def extraDetailinfo():
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
                           to_object=gml.AnyGeometry))
     _imkl20(obj, "bestandMediaType")
+    _imkl20(obj, "adresTekst")
     obj.add_tags_to_process()
     return obj
 
@@ -758,6 +807,15 @@ def graafpolygoon():
                           "IndicatieLeveringCompleet"))
     obj.add_field(B_Field("geometry", "POLYGON", "Geometrie",
                           to_object=gml.Polygon))
+    obj.add_tags_to_process()
+    return obj
+
+def informatiepolygoon():
+    """GROOTS: informatiepolygoon (IMKL 2.0), als eigen laag"""
+    obj = gebiedsinformatie()
+    obj.name = "Informatiepolygoon"
+    obj.add_field(B_Field("geometry", "POLYGON", "Geometrie",
+                          to_object=gml.AnyGeometry))
     obj.add_tags_to_process()
     return obj
 
@@ -890,6 +948,13 @@ def belanghebbende():
     obj.add_field(B_Field("netbeheerderNetOmschrijving", "TEXT", "NetbeheerderNetOmschrijving"))
     obj.add_field(B_Field("idGeraaktBelang", "TEXT",
                           "GeraaktBelangBijGraafpolygoon",
+                          from_attribute='Href'))
+    # GROOTS: bij een orientatie- of informatieverzoek heet de verwijzing anders
+    obj.add_field(B_Field("idGeraaktBelangOrientatie", "TEXT",
+                          "GeraaktBelangBijOrientatiepolygoon",
+                          from_attribute='Href'))
+    obj.add_field(B_Field("idGeraaktBelangInformatie", "TEXT",
+                          "GeraaktBelangBijInformatiepolygoon",
                           from_attribute='Href'))
     obj.add_field(B_Field("idNetbeheerder", "TEXT", "Netbeheerder",
                           from_attribute='Href'))

@@ -29,6 +29,11 @@ import os
 import re
 
 try:
+    _UNIT_MM = core.Qgis.RenderUnit.Millimeters
+except AttributeError:
+    _UNIT_MM = core.QgsUnitTypes.RenderMillimeters
+
+try:
     # QGIS >= 3.30 en QGIS 4
     _GEOM_LINE = core.Qgis.GeometryType.Line
     _GEOM_POLYGON = core.Qgis.GeometryType.Polygon
@@ -257,12 +262,92 @@ class Iface(object):
         """
         qml_path = os.path.join(self.path, 'styles', 'qml')
         qml_file = os.path.join(qml_path, a_layer.name()) + '.qml'
+        name = a_layer.name()
         if os.path.exists(qml_file):
             a_layer.loadNamedStyle(qml_file)
-            return
-        name = a_layer.name()
-        if name.endswith(')') and ' (' in name:
+        elif name.endswith(')') and ' (' in name:
             self._styleDerivedLayer(a_layer, name.split(' (')[0])
+        # GROOTS: aanvullingen op de stijl op basis van IMKL-kenmerken
+        self._addFictiefMarkers(a_layer)
+        self._setLabelPositie(a_layer)
+
+    def _addFictiefMarkers(self, a_layer):
+        """PMKL: op fictief (schematisch) ingetekende leidingen een 'V' om de
+        25 px (hier 7 mm), alleen voor objecten met fictief = 'true'."""
+        if a_layer.geometryType() != _GEOM_LINE:
+            return
+        if a_layer.fields().indexOf('fictief') < 0:
+            return
+        renderer = a_layer.renderer()
+        if renderer is None:
+            return
+        symbols = []
+        if isinstance(renderer, core.QgsRuleBasedRenderer):
+            def walk(rule):
+                for child in rule.children():
+                    if child.symbol() is not None:
+                        symbols.append(child.symbol())
+                    walk(child)
+            walk(renderer.rootRule())
+        else:
+            symbols = renderer.symbols(core.QgsRenderContext())
+        enabled = core.QgsProperty.fromExpression(
+            "coalesce(attribute(@feature, 'fictief'), '') = 'true'")
+        prop = getattr(getattr(core.QgsSymbolLayer, 'Property', None),
+                       'LayerEnabled', None)
+        if prop is None:
+            prop = core.QgsSymbolLayer.PropertyLayerEnabled
+        for symbol in symbols:
+            color = symbol.color()
+            font = core.QgsFontMarkerSymbolLayer('Arial', 'V', 3.0, color)
+            font.setSizeUnit(_UNIT_MM)
+            font.setStrokeWidth(0)
+            marker = core.QgsMarkerSymbol()
+            marker.changeSymbolLayer(0, font)
+            line = core.QgsMarkerLineSymbolLayer(True, 7.0)
+            line.setIntervalUnit(_UNIT_MM)
+            # ook een V in het midden, zodat korte lijnen er een krijgen
+            try:
+                placements = core.Qgis.MarkerLinePlacements(
+                    core.Qgis.MarkerLinePlacement.Interval |
+                    core.Qgis.MarkerLinePlacement.CentralPoint)
+                line.setPlacements(placements)
+            except (AttributeError, TypeError):
+                pass
+            line.setSubSymbol(marker)
+            line.setDataDefinedProperty(prop, enabled)
+            symbol.appendSymbolLayer(line)
+
+    def _setLabelPositie(self, a_layer):
+        """Labels van annotatie en maatvoering plaatsen volgens de IMKL-
+        labelpositie (aangrijpingspunt horizontaal/verticaal 0, 0.5, 1)."""
+        fields = a_layer.fields()
+        if fields.indexOf('labelHorizontaal') < 0 or \
+                a_layer.geometryType() == _GEOM_LINE or \
+                not a_layer.labelsEnabled() or a_layer.labeling() is None:
+            return
+        labeling = a_layer.labeling()
+        if not hasattr(labeling, 'settings'):
+            return
+        settings = core.QgsPalLayerSettings(labeling.settings())
+        # aangrijpingspunt links (0) = tekst rechts van het punt, onder (0) =
+        # tekst boven het punt; QGIS-kwadrant = rij * 3 + kolom
+        expression = (
+            "(CASE WHEN \"labelVerticaal\" = '0' THEN 0 "
+            "WHEN \"labelVerticaal\" = '1' THEN 2 ELSE 1 END) * 3 + "
+            "(CASE WHEN \"labelHorizontaal\" = '0' THEN 2 "
+            "WHEN \"labelHorizontaal\" = '1' THEN 0 ELSE 1 END)")
+        quad = getattr(getattr(core.QgsPalLayerSettings, 'Property', None),
+                       'OffsetQuad', None)
+        if quad is None:
+            quad = core.QgsPalLayerSettings.OffsetQuad
+        settings.dataDefinedProperties().setProperty(
+            quad, core.QgsProperty.fromExpression(expression))
+        over_point = getattr(getattr(core.Qgis, 'LabelPlacement', None),
+                             'OverPoint', None)
+        settings.placement = over_point if over_point is not None \
+            else core.QgsPalLayerSettings.OverPoint
+        a_layer.setLabeling(core.QgsVectorLayerSimpleLabeling(settings))
 
     def _styleDerivedLayer(self, a_layer, base_name):
         """Stijl voor afgeleide laag (bijv. 'Maatvoering (lijn)'): een regel

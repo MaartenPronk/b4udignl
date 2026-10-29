@@ -844,6 +844,8 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
         l_tree.setColumnCount(1)
         l_tree.setItemsExpandable(True)
         parentTypePdf = {}
+        # GROOTS: contactgegevens netbeheerders (o.a. bij graafschade)
+        self._populateContacts(l_tree, doc)
         pdf_files = doc.pdfFiles
         if pdf_files is None:
             return
@@ -855,6 +857,24 @@ met de netbeheerder, voor aanvang van graafwerkzaamheden."
             item = QTreeWidgetItem(parent, [i_pdf.name])
             l_tree.expandItem(parent)
             l_tree.resizeColumnToContents(0)
+
+    def _populateContacts(self, p_tree, doc):
+        companies = getattr(doc, "netOwners", None) or []
+        companies = [c for c in companies
+                     if hasattr(c, "contactRows") and c.contactRows()]
+        if not companies:
+            return
+        root = QTreeWidgetItem(p_tree, [self.tr("Contact netbeheerders")])
+        labels = {"beschadiging": self.tr("Bij schade"),
+                  "netinformatie": self.tr("Netinformatie"),
+                  "aanvraag": self.tr("Aanvraag")}
+        for company in sorted(companies, key=lambda c: (c.name or '')):
+            item = QTreeWidgetItem(root, ["%s (%s)" % (company.name,
+                                                       company.bronhoudercode)])
+            for soort, naam, telefoon, email in company.contactRows():
+                tekst = " | ".join(x for x in (naam, telefoon, email) if x)
+                QTreeWidgetItem(item, ["%s: %s" % (labels.get(soort, soort),
+                                                   tekst)])
 
     def _changeDoc(self, p_currentItem):
         """When user selects other message change other plugin elements as well"""

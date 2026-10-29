@@ -476,6 +476,9 @@ class Company(object):
         """Telephone nr to call when pipe/cable is damaged"""
         self.contactPerson = None
         self.themes = []
+        # GROOTS: volledige contactgegevens (naam, telefoon, e-mail)
+        self.damageContact = None
+        self.netInfoContact = None
 
     def __repr__(self):
         return "Company('%s')" % self.name
@@ -503,10 +506,31 @@ class Company(object):
                 self.contactPerson = person
             if contactBeschadiging is not None:
                 contact = contactBeschadiging.field("contact").value
-                self.telNrDamage = contact.field("telefoon").value
+                if contact is not None:
+                    self.telNrDamage = contact.field("telefoon").value
+                    self.damageContact = Person()
+                    self.damageContact.process_imkl_object(contact)
             if contactNetinformatie is not None:
                 contact = contactNetinformatie.field("aanvraagSoortContact").value
-                self.telNrProblemIT = contact.field("telefoon").value
+                if contact is None:
+                    contact = contactNetinformatie.field("contact").value
+                if contact is not None:
+                    self.telNrProblemIT = contact.field("telefoon").value
+                    self.netInfoContact = Person()
+                    self.netInfoContact.process_imkl_object(contact)
+
+    def contactRows(self):
+        """GROOTS: contactgegevens als rijen (soort, naam, telefoon, e-mail)"""
+        rows = []
+        for soort, person in (("beschadiging", self.damageContact),
+                              ("netinformatie", self.netInfoContact),
+                              ("aanvraag", self.contactPerson)):
+            if person is None:
+                continue
+            if not (person.name or person.telephone or person.email):
+                continue
+            rows.append((soort, person.name, person.telephone, person.email))
+        return rows
             
 class Person(object):
     def __init__(self, name=None):

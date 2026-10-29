@@ -23,6 +23,7 @@ STIJL_OMSCHRIJVING = "KLIC-stijl (b4udignl, GROOTS, PMKL in mm)"
 TABEL_METADATA = "klic_metadata"
 TABEL_LAGEN = "klic_lagen"
 TABEL_BIJLAGEN = "klic_bijlagen"
+TABEL_NETBEHEERDERS = "klic_netbeheerders"
 
 # QGIS 3 en 4: enums zijn in QGIS 4 alleen nog via hun scope bereikbaar
 _ACTION = getattr(QgsVectorFileWriter, "ActionOnExistingFile",
@@ -135,6 +136,9 @@ def _write_metadata(doc, gpkg_path, written):
             ("opgeslagen_op", datetime.datetime.now().isoformat(
                 timespec="seconds")),
             ("opgeslagen_met", "b4udignl (GROOTS)")]
+    # kenmerken van aanvraag en levering (GROOTS)
+    for key, value in sorted((getattr(doc, "aanvraagInfo", None) or {}).items()):
+        meta.append(("aanvraag_" + key, value))
     _write_table(gpkg_path, TABEL_METADATA, ["sleutel", "waarde"], meta)
     lagen = [(table, name, index, count)
              for index, (name, table, count) in enumerate(written)]
@@ -151,6 +155,24 @@ def _write_metadata(doc, gpkg_path, written):
         bijlagen.append((pdf.name, pdf.type, relative, path))
     _write_table(gpkg_path, TABEL_BIJLAGEN,
                  ["naam", "soort", "pad_relatief", "pad_absoluut"], bijlagen)
+    _write_table(gpkg_path, TABEL_NETBEHEERDERS,
+                 ["bronhoudercode", "netbeheerder", "themas", "soort_contact",
+                  "naam", "telefoon", "email"], netbeheerder_rows(doc))
+
+
+def netbeheerder_rows(doc):
+    """Contactgegevens per netbeheerder; een rij per soort contact."""
+    rows = []
+    for company in (getattr(doc, "netOwners", None) or []):
+        themas = ", ".join(t.name for t in company.themes if t.name)
+        contacts = company.contactRows() if hasattr(company, "contactRows") \
+            else []
+        if not contacts:
+            contacts = [("", None, None, None)]
+        for soort, naam, telefoon, email in contacts:
+            rows.append((company.bronhoudercode, company.name, themas, soort,
+                         naam, telefoon, email))
+    return rows
 
 
 def export_doc(doc, gpkg_path, replace_sources=False, progress=None):

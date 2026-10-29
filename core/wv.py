@@ -301,6 +301,138 @@ class Doc(object):
         self._set_short_values_from_url()
         self._set_themes_imkl_objects()
         self._fill_graaf_polygoon()
+        self._set_groots_extras()
+
+    # ------------------------------------------------------------------
+    # GROOTS: extra gegevens uit IMKL 2.0 op de objecten zetten
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _short(value):
+        if value in (None, ''):
+            return value
+        return str(value).rstrip('/').split('/')[-1]
+
+    @staticmethod
+    def _set_field(imkl_object, name, value):
+        field = imkl_object.field(name)
+        if field is not None:
+            field.value = value
+
+    def _set_groots_extras(self):
+        self._set_standaard_dieptelegging()
+        self._set_fictief()
+        self._set_labelpositie()
+        self._set_adres_tekst()
+        self._set_extra_geometrie_25d()
+        self._set_aanvraag_info()
+
+    def _set_standaard_dieptelegging(self):
+        """Standaard diepteligging van het utiliteitsnet op elke kabel/leiding"""
+        depth_on_net = {}
+        for net in self.imkls.get(imkl.UTILITEITSNET, []):
+            id_field = net.field("id")
+            depth_field = net.field("standaardDieptelegging")
+            if id_field is not None and depth_field is not None and \
+                    depth_field.value not in (None, ''):
+                net_id = id_field.value
+                depth_on_net[net_id] = depth_field.value
+                # identificatie kan een versie bevatten (namespace-lokaalID-versie)
+                if net_id.count('-') > 1:
+                    depth_on_net[net_id.rsplit('-', 1)[0]] = depth_field.value
+        if not depth_on_net:
+            return
+        for tag in imkl.tags_pipes_and_cables():
+            for imkl_object in self.imkls.get(tag, []):
+                net_field = imkl_object.field("network_id")
+                if net_field is not None and net_field.value in depth_on_net:
+                    self._set_field(imkl_object, "standaardDieptelegging",
+                                    depth_on_net[net_field.value])
+
+    def _set_fictief(self):
+        """'true' als (een deel van) de ligging fictief/schematisch is"""
+        for tag in imkl.tags_pipes_and_cables():
+            for imkl_object in self.imkls.get(tag, []):
+                if imkl_object.field("fictief") is None:
+                    continue
+                fictief = False
+                for link_id in imkl_object.link_ids:
+                    link = self.imkls_on_id.get(link_id)
+                    if link is None or link.field("fictitious") is None:
+                        continue
+                    if str(link.field("fictitious").value).lower() == 'true':
+                        fictief = True
+                        break
+                self._set_field(imkl_object, "fictief",
+                                'true' if fictief else 'false')
+
+    def _set_labelpositie(self):
+        for tag in (imkl.ANNOTATIE, imkl.MAATVOERING):
+            for imkl_object in self.imkls.get(tag, []):
+                field = imkl_object.field("labelpositie")
+                if field is None or not field.value:
+                    continue
+                positie = field.value[0]
+                for src, dst in (("aangrijpingHorizontaal",
+                                  "labelHorizontaal"),
+                                 ("aangrijpingVerticaal", "labelVerticaal")):
+                    if positie.field(src) is not None:
+                        self._set_field(imkl_object, dst,
+                                        self._short(positie.field(src).value))
+
+    def _set_adres_tekst(self):
+        for imkl_object in self.imkls.get(imkl.EXTRADETAILINFO, []):
+            field = imkl_object.field("adres")
+            if field is None or not field.value:
+                continue
+            delen = []
+            for adres in field.value:
+                def waarde(naam):
+                    f = adres.field(naam)
+                    return f.value if f is not None and f.value else ''
+                straat = ' '.join(x for x in (waarde("openbareRuimte"),
+                                              waarde("huisnummer")) if x)
+                plaats = ' '.join(x for x in (waarde("postcode"),
+                                              waarde("woonplaats")) if x)
+                delen.append(', '.join(x for x in (straat, plaats) if x))
+            self._set_field(imkl_object, "adresTekst",
+                            '; '.join(d for d in delen if d))
+
+    def _set_extra_geometrie_25d(self):
+        """ExtraGeometrie zonder 2D-vlak: gebruik de 2,5D-geometrie (in 2D)"""
+        for imkl_object in self.imkls.get(imkl.EXTRAGEOMETRY, []):
+            geom = imkl_object.geometry_field()
+            bron = '2D' if geom is not None and geom.value else ''
+            for naam, label in (("vlakgeometrie25D", '2.5D vlak'),
+                                ("lijngeometrie25D", '2.5D lijn'),
+                                ("puntgeometrie25D", '2.5D punt')):
+                field = imkl_object.field(naam)
+                if field is None:
+                    continue
+                if not bron and field.value and geom is not None:
+                    geom.value = field.value
+                    bron = label
+                # WKT niet als tekstkolom bewaren
+                field.value = None
+            self._set_field(imkl_object, "geometrieBron", bron or None)
+
+    def _set_aanvraag_info(self):
+        """Kenmerken van aanvraag en levering, voor klic_metadata"""
+        info = {}
+        for tag, keys in ((imkl.GEBIEDSINFORMATIEAANVRAAG,
+                           ("referentie", "aanvraagsoort", "aanvraagdatum",
+                            "soortWerkzaamheden", "startDatum", "eindDatum",
+                            "ordernummer", "positienummer")),
+                          (imkl.GEBIEDSINFORMATIELEVERING,
+                           ("leveringsvolgnummer",
+                            "datumLeveringSamengesteld",
+                            "indicatieLeveringCompleet"))):
+            for imkl_object in self.imkls.get(tag, [])[:1]:
+                for key in keys:
+                    field = imkl_object.field(key)
+                    if field is not None and field.value not in (None, ''):
+                        info[key] = self._short(field.value) \
+                            if field.from_attribute == 'Href' else field.value
+        self.aanvraagInfo = info
 
     def _fill_keyed_imkl_set(self):
         for imkl_set in list(self.imkls.values()):
