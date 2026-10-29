@@ -66,6 +66,57 @@ UTILITYLINK = "UtilityLink"
 WATERLEIDING = "Waterleiding"
 
 
+
+# GROOTS: kenmerken uit IMKL 2.0.0 (imkl-wibon.xsd + INSPIRE us-net) die de
+# plugin eerder niet inlas. _imkl20(obj, ...) voegt ze toe als ze nog
+# ontbreken; bestaande velden (zelfde naam of XML-tag) blijven ongemoeid.
+def _imkl20_field(key):
+    fields = {
+        "materiaal": lambda: B_Field("materiaal", "TEXT", "BuismateriaalType",
+                                     from_attribute='Href'),
+        "geoNauwkeurigheidXY": lambda: B_Field("geoNauwkeurigheidXY", "TEXT",
+                                               "GeoNauwkeurigheidXY",
+                                               from_attribute='Href'),
+        "toelichting": lambda: B_Field("toelichting", "TEXT", "Toelichting"),
+        "omschrijving": lambda: B_Field("omschrijving", "TEXT", "Omschrijving"),
+        "warningType": lambda: B_Field("warningType", "TEXT", "WarningType",
+                                       from_attribute='Href'),
+        "utilityDeliveryType": lambda: B_Field("utilityDeliveryType", "TEXT",
+                                               "UtilityDeliveryType",
+                                               from_attribute='Href'),
+        "druk": lambda: B_Field("druk", "TEXT", "Pressure"),
+        "bovengrondsZichtbaar": lambda: B_Field("bovengrondsZichtbaar", "TEXT",
+                                                "BovengrondsZichtbaar"),
+        "aantalKabelsLeidingen": lambda: B_Field("aantalKabelsLeidingen",
+                                                 "TEXT",
+                                                 "AantalKabelsLeidingen"),
+        "bgtId": lambda: B_Field("bgtId", "TEXT", "BGT_ID",
+                                 to_object=IMKL_Id),
+        "rotatiehoekSymbool": lambda: B_Field("rotatiehoekSymbool", "TEXT",
+                                              "RotatiehoekSymbool"),
+        "eanCode": lambda: B_Field("eanCode", "TEXT", "EanCode"),
+        "hoogte": lambda: B_Field("hoogte", "TEXT", "Hoogte"),
+        "specificAppurtenanceType": lambda: B_Field(
+            "specificAppurtenanceType", "TEXT", "SpecificAppurtenanceType",
+            from_attribute='Href'),
+        "bestandMediaType": lambda: B_Field("bestandMediaType", "TEXT",
+                                            "BestandMediaType",
+                                            from_attribute='Href'),
+        "netbeheerderNetAanduiding": lambda: B_Field(
+            "netbeheerderNetAanduiding", "TEXT", "NetbeheerderNetAanduiding"),
+    }
+    return fields[key]()
+
+def _imkl20(obj, *keys):
+    names = set(f.name for f in obj.fields)
+    tags = set(f.from_tag for f in obj.fields)
+    for key in keys:
+        field = _imkl20_field(key)
+        if field.name not in names and field.from_tag not in tags:
+            obj.add_field(field)
+            names.add(field.name)
+            tags.add(field.from_tag)
+
 def tag2function():
     return {AANDUIDINGEV: aanduidingEisVoorzorgsmaatregel,
             ANNOTATIE: annotatie,
@@ -239,6 +290,7 @@ def aanduidingEisVoorzorgsmaatregel():
     obj.add_field(B_Field("thema", "TEXT", "Theme"))
     obj.add_field(B_Field("geometry", "POLYGON", "Geometrie",
                           to_object=gml.AnyGeometry))
+    _imkl20(obj, "netbeheerderNetAanduiding")
     obj.add_tags_to_process()
     return obj
 
@@ -347,6 +399,7 @@ def diepte():
 def diepteTovMaaiveld():
     obj = diepte()
     obj.name = "DiepteTovMaaiveld"
+    _imkl20(obj, "rotatiehoekSymbool")
     obj.add_tags_to_process()
     return obj
 
@@ -356,6 +409,7 @@ def diepteNAP():
     obj.add_field(B_Field("maaiveldPeil", "TEXT", "MaaiveldPeil"))
     obj.add_field(B_Field("datumOpmetingMaaiveldPeil", "TEXT",
                           "DatumOpmetingMaaiveldPeil"))
+    _imkl20(obj, "rotatiehoekSymbool")
     obj.add_tags_to_process()
     return obj
 
@@ -389,6 +443,8 @@ def duct():
     obj.add_field(B_Field("warningType", "TEXT", "WarningType",
                           from_attribute='Href'))
     obj.add_field(B_Field("ductWidth", "TEXT", "DuctWidth"))
+    _imkl20(obj, "geoNauwkeurigheidXY", "toelichting", "omschrijving",
+            "bovengrondsZichtbaar", "aantalKabelsLeidingen", "bgtId")
     obj.add_tags_to_process()
     return obj
 
@@ -402,6 +458,7 @@ def elektriciteitskabel():
     obj.add_field(B_Field("geoNauwkeurigheidXY", "TEXT", "GeoNauwkeurigheidXY",
                           from_attribute='Href'))
     obj.add_field(B_Field("kabelDiameter", "TEXT", "KabelDiameter"))
+    _imkl20(obj, "toelichting", "omschrijving", "utilityDeliveryType")
     obj.add_tags_to_process()
     return obj
 
@@ -412,6 +469,8 @@ def kabelbed():
                           from_attribute='Href'))
     obj.add_field(B_Field("ductWidth", "TEXT", "DuctWidth"))
     obj.add_field(B_Field("omschrijving", "TEXT", "Omschrijving"))
+    _imkl20(obj, "geoNauwkeurigheidXY", "toelichting", "utilityDeliveryType",
+            "bovengrondsZichtbaar", "aantalKabelsLeidingen", "bgtId")
     obj.add_tags_to_process()
     return obj
 
@@ -423,6 +482,9 @@ def mantelbuis():
     obj.add_field(B_Field("diameter", "TEXT", "PipeDiameter"))
     obj.add_field(B_Field("materiaal", "TEXT", "BuismateriaalType",
                           from_attribute='Href'))
+    _imkl20(obj, "geoNauwkeurigheidXY", "toelichting", "omschrijving",
+            "utilityDeliveryType", "druk", "bovengrondsZichtbaar",
+            "aantalKabelsLeidingen", "bgtId")
     obj.add_tags_to_process()
     return obj
 
@@ -433,6 +495,8 @@ def olieGasChemicalienPijpleiding():
     obj.add_field(B_Field("druk", "TEXT", "Pressure"))
     obj.add_field(B_Field("fluid", "TEXT", "OilGasChemicalsProductType",
                           from_attribute='Href'))
+    _imkl20(obj, "materiaal", "geoNauwkeurigheidXY", "toelichting",
+            "omschrijving", "utilityDeliveryType", "warningType")
     obj.add_tags_to_process()
     return obj
 
@@ -449,6 +513,7 @@ def overig():
     obj.add_field(B_Field("buisDiameter", "TEXT", "PipeDiameter"))
     obj.add_field(B_Field("druk", "TEXT", "Pressure"))
     obj.add_field(B_Field("producttype", "TEXT", "Producttype"))
+    _imkl20(obj, "toelichting", "omschrijving", "utilityDeliveryType")
     obj.add_tags_to_process()
     return obj
 
@@ -461,6 +526,8 @@ def rioolleiding():
     obj.add_field(B_Field("druk", "TEXT", "Pressure"))
     obj.add_field(B_Field("fluid", "TEXT", "SewerWaterType",
                           from_attribute='Href'))
+    _imkl20(obj, "materiaal", "geoNauwkeurigheidXY", "toelichting",
+            "omschrijving", "utilityDeliveryType")
     obj.add_tags_to_process()
     return obj
 
@@ -496,6 +563,7 @@ def thermischePijpleiding():
                           from_attribute='Href'))
     obj.add_field(B_Field("omschrijving", "TEXT", "Omschrijving"))
     obj.add_field(B_Field("toelichting", "TEXT", "Toelichting"))
+    _imkl20(obj, "materiaal", "utilityDeliveryType")
     obj.add_tags_to_process()
     return obj
 
@@ -508,6 +576,8 @@ def waterleiding():
     obj.add_field(B_Field("druk", "TEXT", "Pressure"))
     obj.add_field(B_Field("fluid", "TEXT", "WaterType",
                           from_attribute='Href'))
+    _imkl20(obj, "materiaal", "geoNauwkeurigheidXY", "toelichting",
+            "omschrijving", "utilityDeliveryType")
     obj.add_tags_to_process()
     return obj
 
@@ -553,6 +623,9 @@ def appurtenance():
     obj.add_field(B_Field("registratiedatum", "TEXT", "BeginLifespanVersion"))
     obj.add_field(B_Field("appurtenanceType", "TEXT", "AppurtenanceType",
                           from_attribute='Href'))
+    _imkl20(obj, "specificAppurtenanceType", "bovengrondsZichtbaar",
+            "geoNauwkeurigheidXY", "eanCode", "bgtId", "rotatiehoekSymbool",
+            "omschrijving", "hoogte")
     obj.add_tags_to_process()
     return obj
 
@@ -562,12 +635,15 @@ def kast():
     obj.add_field(B_Field("bovengrondsZichtbaar", "TEXT", "BovengrondsZichtbaar"))
     obj.add_field(B_Field("geoNauwkeurigheidXY", "TEXT", "GeoNauwkeurigheidXY",
                           from_attribute='Href'))
+    _imkl20(obj, "bgtId", "rotatiehoekSymbool", "omschrijving")
     obj.add_tags_to_process()
     return obj
 
 def mangat():
     obj = PuntOpNet()
     obj.name = "Mangat"
+    _imkl20(obj, "bovengrondsZichtbaar", "geoNauwkeurigheidXY", "bgtId",
+            "rotatiehoekSymbool", "omschrijving")
     obj.add_tags_to_process()
     return obj
 
@@ -575,6 +651,8 @@ def mast():
     obj = PuntOpNet()
     obj.name = "Mast"
     obj.add_field(B_Field("hoogte", "TEXT", "PoleHeight"))
+    _imkl20(obj, "bovengrondsZichtbaar", "geoNauwkeurigheidXY", "bgtId",
+            "rotatiehoekSymbool", "omschrijving")
     obj.add_tags_to_process()
     return obj
 
@@ -587,6 +665,8 @@ def toren():
     obj = PuntOpNet()
     obj.name = "Toren"
     obj.add_field(B_Field("hoogte", "TEXT", "TowerHeight"))
+    _imkl20(obj, "bovengrondsZichtbaar", "geoNauwkeurigheidXY", "bgtId",
+            "rotatiehoekSymbool", "omschrijving")
     obj.add_tags_to_process()
     return obj
 
@@ -637,6 +717,7 @@ def extraDetailinfo():
                           "BestandIdentificator"))
     obj.add_field(B_Field("geometry", "POINT", "Ligging",
                           to_object=gml.AnyGeometry))
+    _imkl20(obj, "bestandMediaType")
     obj.add_tags_to_process()
     return obj
 
